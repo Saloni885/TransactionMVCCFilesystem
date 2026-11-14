@@ -2,6 +2,7 @@ import os
 import sqlite3
 import subprocess
 import tkinter as tk
+import json
 from tkinter import ttk, messagebox, simpledialog
 
 # ------------------------------------------------------------
@@ -32,12 +33,71 @@ class MVCCFilesystemGUI:
 
         project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.db_path = os.path.join(project_dir, "database", "project.db")
+        self.backend_process = None
+        self._start_backend()
         self.selected_file_id = None
         self.selected_file_name = None
 
         self._configure_styles()
         self._build_layout()
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.close_app)
+
+        # Test C++ backend connection
+        try:
+            result = self.backend_command("STATE")
+            print("C++ Backend Connected:", result)
+        except Exception as error:
+            messagebox.showerror("Backend Connection Error", str(error))
+
         self.refresh_files()
+
+    def _start_backend(self):
+        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        exe_path = os.path.join(project_dir, "filesystem.exe")
+
+        if not os.path.exists(exe_path):
+            messagebox.showerror(
+                "Backend Error",
+                "filesystem.exe not found. Compile the C++ project first."
+            )
+            return
+
+        try:
+            self.backend_process = subprocess.Popen(
+                [exe_path, "--gui"],
+                cwd=project_dir,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+        except OSError as error:
+            messagebox.showerror("Backend Error", str(error))
+
+    def backend_command(self, command):
+        if self.backend_process is None or self.backend_process.poll() is not None:
+            raise RuntimeError("C++ backend is not running.")
+
+        self.backend_process.stdin.write(command + "\n")
+        self.backend_process.stdin.flush()
+
+        response = self.backend_process.stdout.readline()
+
+        if not response:
+            raise RuntimeError("No response received from C++ backend.")
+
+        return json.loads(response)
+
+    def close_app(self):
+        if self.backend_process and self.backend_process.poll() is None:
+            try:
+                self.backend_command("QUIT")
+                self.backend_process.wait(timeout=3)
+            except Exception:
+                self.backend_process.terminate()
+
+        self.root.destroy()
 
     # ------------------------- Styling -------------------------
     def _configure_styles(self):
@@ -82,234 +142,402 @@ class MVCCFilesystemGUI:
         )
 
     def _build_layout(self):
-        # Main app shell
-        shell = tk.Frame(self.root, bg=BG)
-        shell.pack(fill="both", expand=True)
+        self.root.title("Transactional MVCC Filesystem")
+        self.root.geometry("1500x950")
+        self.root.minsize(1100, 750)
 
-        # Left navigation
-        sidebar = tk.Frame(shell, bg=NAVY, width=225)
-        sidebar.pack(side="left", fill="y")
-        sidebar.pack_propagate(False)
+        # Main background
+        main = tk.Frame(self.root, bg="#F2F5FF")
+        main.pack(fill="both", expand=True)
 
-        brand = tk.Frame(sidebar, bg=NAVY)
-        brand.pack(fill="x", padx=22, pady=(26, 30))
-
-        tk.Label(
-            brand, text="◈  MVCC STUDIO",
-            bg=NAVY, fg="#FFFFFF",
-            font=("Segoe UI", 15, "bold")
-        ).pack(anchor="w")
-
-        tk.Label(
-            brand, text="TRANSACTIONAL FILESYSTEM",
-            bg=NAVY, fg="#AAB9E8",
-            font=("Segoe UI", 8, "bold")
-        ).pack(anchor="w", pady=(7, 0))
-
-        tk.Label(
-            sidebar, text="WORKSPACE",
-            bg=NAVY, fg="#8292C7",
-            font=("Segoe UI", 8, "bold")
-        ).pack(anchor="w", padx=22, pady=(0, 10))
-
-        self.nav_files = self._nav_item(
-            sidebar, "▦", "File Explorer",
-            command=self.show_file_explorer, active=True
-        )
-        self.nav_history = self._nav_item(
-            sidebar, "◷", "Version History",
-            command=self.show_version_history
-        )
-        self.nav_snapshots = self._nav_item(
-            sidebar, "▣", "Snapshots",
-            command=self.show_snapshots
-        )
-        self.nav_transactions = self._nav_item(
-            sidebar, "⇄", "Transactions",
-            command=self.show_transactions
-        )
-        self.nav_concurrency = self._nav_item(
-            sidebar, "⟳", "Concurrency & Deadlocks",
-            command=self.show_concurrency
-        )
-
-        spacer = tk.Frame(sidebar, bg=NAVY)
-        spacer.pack(fill="both", expand=True)
-
-        tk.Frame(sidebar, bg="#34416F", height=1).pack(fill="x", padx=18, pady=12)
-        tk.Label(
-            sidebar, text="SQLite connected",
-            bg=NAVY, fg="#B8C7EF",
-            font=("Segoe UI", 9)
-        ).pack(anchor="w", padx=22, pady=(0, 5))
-        tk.Label(
-            sidebar, text="Local project database",
-            bg=NAVY, fg="#8292C7",
-            font=("Segoe UI", 8)
-        ).pack(anchor="w", padx=22, pady=(0, 22))
-
-        # Main content
-        content = tk.Frame(shell, bg=BG)
-        content.pack(side="left", fill="both", expand=True)
-
-        # Header
-        header = tk.Frame(content, bg=PANEL, height=104)
+        # ---------------- HEADER ----------------
+        header = tk.Frame(main, bg="#C9D5FF", height=105)
         header.pack(fill="x")
         header.pack_propagate(False)
 
-        header_left = tk.Frame(header, bg=PANEL)
-        header_left.pack(side="left", padx=28, pady=13)
+        tk.Label(
+            header, text="💻  Transactional MVCC Filesystem",
+            bg="#C9D5FF", fg="#101D49",
+            font=("Segoe UI", 23, "bold")
+        ).pack(anchor="w", padx=28, pady=(15, 0))
 
         tk.Label(
-            header_left, text="File Explorer",
-            bg=PANEL, fg=TEXT, font=("Segoe UI", 18, "bold")
-        ).pack(anchor="w")
-        tk.Label(
-            header_left, text="Manage files and inspect committed versions",
-            bg=PANEL, fg=MUTED, font=("Segoe UI", 9)
-        ).pack(anchor="w", pady=(3, 0))
+            header,
+            text="Advanced File System with MVCC, Snapshots, Deadlock Detection & Memory Management",
+            bg="#C9D5FF", fg="#26345C",
+            font=("Segoe UI", 11, "italic")
+        ).pack(anchor="w", padx=85)
 
         self.connection_badge = tk.Label(
-            header, text="●  DATABASE",
-            bg="#E7F7F0", fg=GREEN,
-            font=("Segoe UI", 9, "bold"), padx=12, pady=7
+            header, text="● Database Connected\nReady to use!",
+            bg="#E3EBFF", fg="#087B52",
+            font=("Segoe UI", 10, "bold"), padx=18, pady=10
         )
-        self.connection_badge.pack(side="right", padx=28)
+        self.connection_badge.place(relx=0.98, rely=0.5, anchor="e")
 
-        # Scrollable-ish main area
-        body = tk.Frame(content, bg=BG)
-        body.pack(fill="both", expand=True, padx=25, pady=22)
+        # ---------------- DASHBOARD BODY ----------------
+          # Scrollable dashboard area
+        scroll_container = tk.Frame(main, bg="#F2F5FF")
+        scroll_container.pack(fill="both", expand=True, padx=8, pady=5)
 
-        # Summary cards
-        cards = tk.Frame(body, bg=BG)
-        cards.pack(fill="x", pady=(0, 18))
+        dashboard_canvas = tk.Canvas(
+            scroll_container,
+          bg="#F2F5FF",
+          highlightthickness=0
+        )
+        dashboard_canvas.pack(side="left", fill="both", expand=True)
 
-        self.total_value = self._stat_card(cards, "TOTAL FILES", "—", "Visible files")
-        self.version_value = self._stat_card(cards, "SELECTED VERSION", "—", "Latest committed")
-        self.status_value = self._stat_card(cards, "SYSTEM STATUS", "Ready", "SQLite database")
+        scrollbar = ttk.Scrollbar(
+          scroll_container,
+           orient="vertical",
+         command=dashboard_canvas.yview
+        )
+        scrollbar.pack(side="right", fill="y")
 
-        # Two-column work area
-        work = tk.Frame(body, bg=BG)
-        work.pack(fill="both", expand=True)
+        dashboard_canvas.configure(
+           yscrollcommand=scrollbar.set
+        )
 
-        left = tk.Frame(work, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 14))
+        body = tk.Frame(dashboard_canvas, bg="#F2F5FF")
 
-        list_header = tk.Frame(left, bg=PANEL)
-        list_header.pack(fill="x", padx=18, pady=(18, 10))
+        dashboard_window = dashboard_canvas.create_window(
+            (0, 0),
+          window=body,
+          anchor="nw"
+        )
+
+        def update_scroll_region(event):
+             dashboard_canvas.configure(
+        scrollregion=dashboard_canvas.bbox("all")
+    )
+
+        def update_dashboard_width(event):
+           dashboard_canvas.itemconfigure(
+        dashboard_window,
+        width=event.width
+    )
+
+        body.bind("<Configure>", update_scroll_region)
+        dashboard_canvas.bind("<Configure>", update_dashboard_width)
+
+      # Mouse-wheel scrolling (Windows)
+        def scroll_dashboard(event):
+         dashboard_canvas.yview_scroll(
+        int(-1 * (event.delta / 120)),
+        "units"
+    )
+
+         dashboard_canvas.bind_all("<MouseWheel>", scroll_dashboard)
+
+      # Dashboard grid
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        body.rowconfigure(2, weight=0)
+
+        def panel(parent, title, color, row, col):
+            frame = tk.LabelFrame(
+                parent, text=title,
+                bg="white", fg="#14234D",
+                font=("Segoe UI", 14, "bold"),
+                labelanchor="nw",
+                padx=10, pady=10,
+                highlightbackground=color,
+                highlightthickness=1
+            )
+            frame.grid(
+                row=row, column=col, sticky="nsew",
+                padx=6, pady=6
+            )
+            return frame
+
+        def action(parent, text, command, color="#EAF0FF"):
+            btn = tk.Button(
+                parent, text=text, command=command,
+                bg=color, fg="#10265C",
+                activebackground="#D5E1FF",
+                relief="ridge", bd=1,
+                cursor="hand2",
+                font=("Segoe UI", 10, "bold"),
+                padx=8, pady=9
+            )
+            btn.pack(fill="x", pady=3)
+            return btn
+
+        # ---------------- FILE OPERATIONS ----------------
+        files_panel = panel(
+            body, "📁  File Operations", "#789BFF", 0, 0
+        )
+
+        files_panel.columnconfigure(0, weight=1)
+        files_panel.columnconfigure(1, weight=1)
+
+        operations = tk.Frame(files_panel, bg="white")
+        operations.grid(row=0, column=0, sticky="nsew", padx=5)
+
+        action(operations, "1.  Create File",
+               self.create_file_dialog)
+        action(operations, "2.  Read File",
+               self.view_selected_file)
+        action(operations, "3.  Update File",
+               self.update_file_dialog)
+        action(operations, "4.  Delete File",
+               self.delete_selected_file)
+        action(operations, "5.  View Files",
+               self.refresh_files)
+        action(operations, "6.  Version History",
+               self.view_version_history)
+
+        viewer = tk.Frame(files_panel, bg="#F5F7FF")
+        viewer.grid(row=0, column=1, sticky="nsew", padx=5)
 
         tk.Label(
-            list_header, text="Your files",
-            bg=PANEL, fg=TEXT, font=("Segoe UI", 12, "bold")
-        ).pack(side="left")
+            viewer, text="File Content Viewer",
+            bg="#F5F7FF", fg="#14234D",
+            font=("Segoe UI", 11, "bold")
+        ).pack(anchor="w", padx=8, pady=5)
 
-        self.count_label = tk.Label(
-            list_header, text="0 items",
-            bg=PANEL, fg=MUTED, font=("Segoe UI", 9)
-        )
-        self.count_label.pack(side="right")
-
-        search_row = tk.Frame(left, bg=PANEL)
-        search_row.pack(fill="x", padx=18, pady=(0, 12))
-
-        self.search_var = tk.StringVar()
-        self.search_var.trace_add("write", lambda *_: self._filter_files())
-        self.search_entry = ttk.Entry(
-            search_row, textvariable=self.search_var
-        )
-        self.search_entry.pack(side="left", fill="x", expand=True)
-        self.search_entry.insert(0, "")
-
-        ttk.Button(
-            search_row, text="↻ Refresh",
-            command=self.refresh_files
-        ).pack(side="left", padx=(8, 0))
-
-        table_wrap = tk.Frame(left, bg=PANEL)
-        table_wrap.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-
-        columns = ("file_id", "file_name", "current_version")
         self.file_table = ttk.Treeview(
-            table_wrap, columns=columns, show="headings", selectmode="browse"
+            viewer,
+            columns=("file_id", "file_name", "current_version"),
+            show="headings", height=4,
+            selectmode="browse"
         )
         self.file_table.heading("file_id", text="ID")
         self.file_table.heading("file_name", text="FILE NAME")
         self.file_table.heading("current_version", text="VERSION")
-        self.file_table.column("file_id", width=55, anchor="center", stretch=False)
-        self.file_table.column("file_name", width=230)
-        self.file_table.column("current_version", width=85, anchor="center", stretch=False)
-
-        scrollbar = ttk.Scrollbar(table_wrap, orient="vertical", command=self.file_table.yview)
-        self.file_table.configure(yscrollcommand=scrollbar.set)
-        self.file_table.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        self.file_table.bind("<<TreeviewSelect>>", self.on_file_selected)
-        self.file_table.bind("<Double-1>", lambda _event: self.view_selected_file())
-
-        # Right panel
-        right = tk.Frame(work, bg=PANEL, width=355, highlightbackground=BORDER, highlightthickness=1)
-        right.pack(side="right", fill="y")
-        right.pack_propagate(False)
-
-        tk.Label(
-            right, text="File details",
-            bg=PANEL, fg=TEXT, font=("Segoe UI", 12, "bold")
-        ).pack(anchor="w", padx=18, pady=(18, 3))
-
-        tk.Label(
-            right, text="Select a file to inspect its content.",
-            bg=PANEL, fg=MUTED, font=("Segoe UI", 9)
-        ).pack(anchor="w", padx=18, pady=(0, 12))
+        self.file_table.column("file_id", width=35)
+        self.file_table.column("file_name", width=130)
+        self.file_table.column("current_version", width=65)
+        self.file_table.pack(fill="x", padx=5, pady=4)
+        self.count_label = tk.Label(
+           viewer,
+           text="0 files",
+             bg="white",
+             fg="#68758A",
+                font=("Segoe UI", 8)
+             )
+        self.count_label.pack(anchor="e", padx=8)
+        self.file_table.bind(
+            "<<TreeviewSelect>>", self.on_file_selected
+        )
 
         self.selected_name_label = tk.Label(
-            right, text="No file selected",
-            bg="#F4F7FC", fg=MUTED,
-            font=("Segoe UI", 10, "bold"),
-            anchor="w", padx=12, pady=11
+            viewer, text="Select a file",
+            bg="#EAF0FF", fg="#14234D",
+            font=("Segoe UI", 9, "bold"), pady=7
         )
-        self.selected_name_label.pack(fill="x", padx=18, pady=(0, 12))
+        self.selected_name_label.pack(fill="x", padx=5)
 
         self.content_box = tk.Text(
-            right, height=13, wrap="word",
-            bg="#F8FAFD", fg=TEXT,
-            relief="flat", bd=0,
-            padx=12, pady=12,
-            font=("Consolas", 10),
-            insertbackground=BLUE
+            viewer, height=7, wrap="word",
+            bg="#F8FAFF", fg="#172033",
+            font=("Consolas", 9),
+            relief="flat", padx=8, pady=8
         )
-        self.content_box.pack(fill="both", expand=True, padx=18, pady=(0, 12))
-        self.content_box.insert("1.0", "Choose a file from the list, then click View Content.")
+        self.content_box.pack(fill="both", expand=True, padx=5, pady=5)
+        self.content_box.insert("1.0", "Select a file and click Read File.")
         self.content_box.config(state="disabled")
 
-        action_frame = tk.Frame(right, bg=PANEL)
-        action_frame.pack(fill="x", padx=18, pady=(0, 18))
-
-        self._button(action_frame, "View Content", self.view_selected_file, BLUE).pack(
-            fill="x", pady=(0, 7)
-        )
-        self._button(action_frame, "View Version History", self.view_version_history, "#EAF0FF", BLUE).pack(
-            fill="x", pady=(0, 7)
-        )
-        self._button(action_frame, "Create New File", self.create_file_dialog, "#E7F7F0", GREEN).pack(
-            fill="x", pady=(0, 7)
-        )
-        self._button(action_frame, "Update Selected File", self.update_file_dialog, "#FFF4DF", AMBER).pack(
-            fill="x", pady=(0, 7)
-        )
-        self._button(action_frame, "Delete Selected File", self.delete_selected_file, "#FCEBED", RED).pack(
-            fill="x"
+        # ---------------- TRANSACTIONS ----------------
+        tx_panel = panel(
+            body, "🔄  Transactions", "#72C99B", 0, 1
         )
 
-        # Footer status bar
-        footer = tk.Frame(content, bg="#E8EDF5", height=30)
-        footer.pack(fill="x", side="bottom")
-        footer.pack_propagate(False)
+        tx_panel.columnconfigure(0, weight=1)
+        tx_panel.columnconfigure(1, weight=1)
+
+        tx_actions = tk.Frame(tx_panel, bg="white")
+        tx_actions.grid(row=0, column=0, sticky="nsew", padx=5)
+
+        action(tx_actions, "7.  Begin Transaction",
+               lambda: self._dashboard_backend("BEGIN"))
+        action(tx_actions, "8.  Commit Transaction",
+               lambda: self._dashboard_backend("COMMIT"))
+        action(tx_actions, "9.  Abort Transaction",
+               lambda: self._dashboard_backend("ABORT"))
+        action(tx_actions, "10. Transaction History",
+               lambda: self._show_database_records(
+                   "Transactions", "transactions",
+                   ("transaction_id", "status", "start_seq",
+                    "commit_seq", "completed_at"),
+                   ("id", "status", "start_seq", "commit_seq")
+               ))
+        action(tx_actions, "14. Select Transaction",
+               self._select_transaction_dialog)
+
+        tx_info = tk.Frame(tx_panel, bg="#E7F8EF")
+        tx_info.grid(row=0, column=1, sticky="nsew", padx=5)
+
+        tk.Label(
+            tx_info, text="Current Transaction",
+            bg="#E7F8EF", fg="#153F31",
+            font=("Segoe UI", 11, "bold")
+        ).pack(pady=12)
+
+        self.current_tx_label = tk.Label(
+            tx_info, text="None",
+            bg="#E7F8EF", fg="#10251C",
+            font=("Segoe UI", 20, "bold")
+        )
+        self.current_tx_label.pack(pady=10)
+
+        self.tx_detail_label = tk.Label(
+            tx_info, text="No active transaction",
+            bg="#E7F8EF", fg="#315B48",
+            font=("Segoe UI", 10)
+        )
+        self.tx_detail_label.pack()
+
+        # ---------------- SNAPSHOTS ----------------
+        snapshot_panel = panel(
+            body, "📸  Snapshots", "#A48AFF", 1, 0
+        )
+
+        snapshot_panel.columnconfigure(0, weight=1)
+        snapshot_panel.columnconfigure(1, weight=1)
+
+        snapshot_actions = tk.Frame(snapshot_panel, bg="white")
+        snapshot_actions.grid(row=0, column=0, sticky="nsew", padx=5)
+
+        action(
+    snapshot_actions,
+    "11. Create Snapshot",
+    self._create_snapshot_dialog
+)
+        action(
+    snapshot_actions,
+    "12. Restore Snapshot",
+    self._restore_snapshot_dialog
+)
+        action(snapshot_actions, "13. View Snapshots",
+               lambda: self._show_database_records(
+                   "Snapshots", "snapshots",
+                   ("snapshot_id", "snapshot_name", "created_at"),
+                   ("id", "name", "created_at")
+               ))
+
+        self.snapshot_info = tk.Label(
+            snapshot_panel,
+            text="Available Snapshots\n\nNo snapshots loaded.",
+            bg="#F1EDFF", fg="#34305F",
+            font=("Segoe UI", 11), justify="center"
+        )
+        self.snapshot_info.grid(
+            row=0, column=1, sticky="nsew", padx=5
+        )
+
+        # ---------------- DEADLOCK MANAGEMENT ----------------
+        deadlock_panel = panel(
+            body, "⚠️  Deadlock Management", "#F4B36B", 1, 1
+        )
+
+        deadlock_panel.columnconfigure(0, weight=1)
+        deadlock_panel.columnconfigure(1, weight=1)
+
+        deadlock_actions = tk.Frame(deadlock_panel, bg="white")
+        deadlock_actions.grid(
+            row=0, column=0, sticky="nsew", padx=5
+        )
+
+        action(deadlock_actions, "15. View Locks",
+               self._show_locks)
+
+        action(deadlock_actions, "16. Wait-For Graph",
+               self._show_wait_for_graph)
+
+        action(deadlock_actions, "17. Detect Deadlock",
+               self._detect_deadlock)
+
+        action(deadlock_actions, "18. Recover Deadlock",
+               self._recover_deadlock)
+
+        self.lock_info = tk.Label(
+            deadlock_panel,
+            text="Lock Information\n\nNo live lock data loaded.",
+            bg="#FFF3E9", fg="#71461F",
+            font=("Segoe UI", 10), justify="center"
+        )
+        self.lock_info.grid(
+            row=0, column=1, sticky="nsew", padx=5
+        )
+
+        # ---------------- MEMORY MANAGEMENT ----------------
+        memory_panel = tk.LabelFrame(
+            body, text="🧠  Memory Management",
+            bg="white", fg="#12594C",
+            font=("Segoe UI", 14, "bold"),
+            padx=10, pady=8,
+            highlightbackground="#69C9B5",
+            highlightthickness=1
+        )
+        memory_panel.grid(
+            row=2, column=0, columnspan=2,
+            sticky="nsew", padx=6, pady=6
+        )
+
+        memory_top = tk.Frame(memory_panel, bg="white")
+        memory_top.pack(fill="x")
+
+        tk.Label(
+            memory_top, text="Select Algorithm:",
+            bg="white", fg="#172033",
+            font=("Segoe UI", 10, "bold")
+        ).pack(side="left", padx=8)
+
+        self.paging_algorithm = tk.StringVar(value="FIFO")
+
+        tk.Radiobutton(
+            memory_top, text="FIFO",
+            variable=self.paging_algorithm, value="FIFO",
+            bg="white", font=("Segoe UI", 10)
+        ).pack(side="left", padx=5)
+
+        tk.Radiobutton(
+            memory_top, text="LRU",
+            variable=self.paging_algorithm, value="LRU",
+            bg="white", font=("Segoe UI", 10)
+        ).pack(side="left", padx=5)
+
+        action(
+    memory_top,
+    "19. Apply Algorithm",
+    self._apply_paging_algorithm
+).pack(side="left", padx=15)
+
+        action(
+    memory_panel,
+    "20. View Frames & Statistics",
+    self._view_memory_stats
+).pack(fill="x", padx=8, pady=5)
+        self.memory_info = tk.Label(
+            memory_panel,
+            text="Memory Frames: 3     |     Page Size: 4096 bytes\n"
+                 "Live frame and paging statistics will be connected to C++.",
+            bg="#E7F8F4", fg="#155C4F",
+            font=("Segoe UI", 10), pady=9
+        )
+        self.memory_info.pack(fill="x", padx=8, pady=4)
+
+        # ---------------- FOOTER ----------------
         self.status_label = tk.Label(
-            footer, text="Ready",
-            bg="#E8EDF5", fg=MUTED,
-            font=("Segoe UI", 9), anchor="w"
+            main,
+            text="● System Ready! Select any operation from the dashboard.",
+            bg="#DDF7E6", fg="#17633B",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w", padx=18, pady=9
         )
-        self.status_label.pack(fill="both", padx=25)
+        self.status_label.pack(fill="x", side="bottom")
+
+        self.total_value = tk.Label(main)
+        self.version_value = tk.Label(main)
+        self.status_value = tk.Label(main)
+         
+        self.search_var = tk.StringVar(value="")
+         
+        self.refresh_files()
+        self._refresh_dashboard_state()
 
     def _nav_item(self, parent, symbol, label, command=None, active=False):
         bg = "#2B3A73" if active else NAVY
@@ -795,6 +1023,21 @@ class MVCCFilesystemGUI:
                 LIMIT 1
             """, (file_id,))
             row = cursor.fetchone()
+            if row:
+                paging_result = self.backend_command(
+                    f"LOADFILE {file_id} {file_name}"
+                )
+
+                print("LOADFILE RESPONSE:", paging_result)
+
+                if not paging_result.get("ok"):
+                    messagebox.showwarning(
+                        "Paging Warning",
+                        paging_result.get(
+                            "message",
+                            "File could not be loaded into memory."
+                        )
+                    )
 
             self.content_box.config(state="normal")
             self.content_box.delete("1.0", tk.END)
@@ -997,93 +1240,129 @@ class MVCCFilesystemGUI:
         try:
             connection = self._connect()
             cursor = connection.cursor()
+
             columns = self._table_columns(cursor, "file_versions")
-            committed_filter = "AND COALESCE(is_committed, 1) = 1" if "is_committed" in columns else ""
+            committed_filter = (
+                "AND COALESCE(is_committed, 1) = 1"
+                if "is_committed" in columns
+                else ""
+            )
+
             cursor.execute(f"""
                 SELECT content FROM file_versions
                 WHERE file_id = ? {committed_filter}
-                ORDER BY version_number DESC LIMIT 1
+                ORDER BY version_number DESC
+                LIMIT 1
             """, (file_id,))
+
             row = cursor.fetchone()
+            initial = ""
+
             if row:
+                paging_result = self.backend_command(
+                    f"LOADFILE {file_id} {file_name}"
+                )
+
+                if not paging_result.get("ok"):
+                    messagebox.showwarning(
+                        "Paging Warning",
+                        paging_result.get(
+                            "message",
+                            "File could not be loaded into memory."
+                        ),
+                        parent=dialog
+                    )
+
                 initial = row["content"] or ""
+
         except sqlite3.Error as error:
-            messagebox.showerror("Read Error", str(error), parent=dialog)
+            messagebox.showerror(
+                "Read Error",
+                str(error),
+                parent=dialog
+            )
             dialog.destroy()
             return
+
         finally:
             if connection:
                 connection.close()
 
-        tk.Label(dialog, text="New content", bg=BG, fg=TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=24)
-        content_text = tk.Text(dialog, wrap="word", font=("Consolas", 10), bd=0, padx=12, pady=10)
-        content_text.pack(fill="both", expand=True, padx=24, pady=(5, 15))
+        tk.Label(
+            dialog,
+            text="New content",
+            bg=BG,
+            fg=TEXT,
+            font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w", padx=24)
+
+        content_text = tk.Text(
+            dialog,
+            height=10,
+            wrap="word",
+            font=("Consolas", 10),
+            bd=0,
+            padx=12,
+            pady=10
+        )
+
+        content_text.pack(
+            fill="both",
+            expand=True,
+            padx=24,
+            pady=(5, 10)
+        )
+
         content_text.insert("1.0", initial)
 
+         
         def save():
             content = content_text.get("1.0", "end-1c")
-            connection2 = None
+
             try:
-                connection2 = self._connect()
-                cursor2 = connection2.cursor()
-                cursor2.execute(
-                    "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_version "
-                    "FROM file_versions WHERE file_id = ?",
-                    (file_id,)
-                )
-                next_version = cursor2.fetchone()["next_version"]
+                # Encode filename and content for safe backend communication
+                encoded_name = file_name.encode("utf-8").hex()
+                encoded_content = content.encode("utf-8").hex() or "-"
 
-                file_cols = self._table_columns(cursor2, "files")
-                version_cols = self._table_columns(cursor2, "file_versions")
-                version_values = {}
-                possible = {
-                    "file_id": file_id,
-                    "version_number": next_version,
-                    "content": content,
-                    "is_committed": 1,
-                    "transaction_id": None,
-                    "commit_seq": None,
-                    "created_at": self._now_sql(),
-                }
-                for col, value in possible.items():
-                    if col in version_cols:
-                        version_values[col] = value
-
-                cursor2.execute(
-                    f"INSERT INTO file_versions ({', '.join(version_values)}) VALUES ({', '.join('?' for _ in version_values)})",
-                    tuple(version_values.values())
+                # Send update to the C++ transaction manager
+                result = self.backend_command(
+                    f"UPDATE {encoded_name} {encoded_content}"
                 )
 
-                updates = {}
-                if "current_version" in file_cols:
-                    updates["current_version"] = next_version
-                if "updated_at" in file_cols:
-                    updates["updated_at"] = self._now_sql()
-                if updates:
-                    cursor2.execute(
-                        f"UPDATE files SET {', '.join(f'{col} = ?' for col in updates)} WHERE file_id = ?",
-                        (*updates.values(), file_id)
+                message = result.get(
+                    "message",
+                    "Update operation completed."
+                )
+
+                if result.get("ok"):
+                    dialog.destroy()
+                    self.refresh_files()
+                    self._select_file_by_id(file_id)
+
+                    self._set_status(
+                        "Update staged successfully. Commit the transaction to save it.",
+                        GREEN
                     )
 
-                connection2.commit()
-                dialog.destroy()
-                self.refresh_files()
-                self._set_status(f"Saved {file_name} as version {next_version}.", GREEN)
-                self._select_file_by_id(file_id)
-                self.view_selected_file()
-            except sqlite3.Error as error:
-                if connection2:
-                    connection2.rollback()
+                    messagebox.showinfo(
+                        "Update Staged",
+                        message + "\n\nCommit the transaction to make this update permanent."
+                    )
+
+                else:
+                    messagebox.showwarning(
+                        "Update Failed",
+                        message,
+                        parent=dialog
+                    )
+
+            except Exception as error:
                 messagebox.showerror(
                     "Update Error",
-                    "Could not save a new version.\n\n"
-                    f"{error}\n\n"
-                    "Your database schema may require additional fields.",
+                    str(error),
                     parent=dialog
                 )
-            finally:
-                if connection2:
-                    connection2.close()
+
 
         self._button(dialog, "Save New Version", save, BLUE).pack(fill="x", padx=24, pady=(0, 20))
 
@@ -1133,6 +1412,474 @@ class MVCCFilesystemGUI:
                 self.file_table.see(item)
                 self.on_file_selected()
                 break
+     
+    def _create_snapshot_dialog(self):
+        name = simpledialog.askstring(
+            "Create Snapshot",
+            "Enter snapshot name:",
+            parent=self.root
+        )
+
+        if name is None:
+            return
+
+        name = name.strip()
+
+        if not name:
+            messagebox.showwarning(
+                "Invalid Name",
+                "Snapshot name cannot be empty."
+            )
+            return
+
+        try:
+            result = self.backend_command("SNAPSHOT " + name)
+            message = result.get("message", "Snapshot operation completed.")
+
+            if result.get("ok"):
+                self._set_status(message, GREEN)
+                messagebox.showinfo("Snapshot Created", message)
+            else:
+                self._set_status(message, RED)
+                messagebox.showwarning("Snapshot Failed", message)
+
+        except Exception as error:
+            messagebox.showerror("Snapshot Error", str(error))
+            self._set_status("Snapshot creation failed.", RED)
+     
+    def _restore_snapshot_dialog(self):
+
+        name = simpledialog.askstring(
+            "Restore Snapshot",
+            "Enter the snapshot name to restore:",
+            parent=self.root
+        )
+
+        if name is None:
+            return
+
+        name = name.strip()
+
+        if not name:
+            messagebox.showwarning(
+                "Invalid Name",
+                "Snapshot name cannot be empty."
+            )
+            return
+
+        confirm = messagebox.askyesno(
+            "Confirm Restore",
+            f"Are you sure you want to restore '{name}'?\n\n"
+            "Current committed files will be replaced."
+        )
+
+        if not confirm:
+            return
+
+        try:
+            result = self.backend_command("RESTORE " + name)
+            message = result.get(
+                "message",
+                "Snapshot restoration completed."
+            )
+
+            if result.get("ok"):
+                self.refresh_files()
+                self._refresh_dashboard_state()
+                self._set_status(message, GREEN)
+
+                messagebox.showinfo(
+                    "Restore Successful",
+                    message
+                )
+            else:
+                self._set_status(message, RED)
+
+                messagebox.showwarning(
+                    "Restore Failed",
+                    message
+                )
+
+        except Exception as error:
+            messagebox.showerror(
+                "Restore Error",
+                str(error)
+            )
+            self._set_status("Snapshot restoration failed.", RED)
+
+    def _not_connected(self, feature):
+        messagebox.showinfo(
+            feature,
+            f"{feature} is visible in the dashboard, "
+            "but its GUI backend command has not been implemented yet."
+        )
+
+    def _dashboard_backend(self, command):
+        try:
+            result = self.backend_command(command)
+            message = result.get("message", "Operation completed.")
+            self._set_status(message, GREEN)
+            self._refresh_dashboard_state()
+            messagebox.showinfo("Backend Response", message)
+        except Exception as error:
+            messagebox.showerror("Backend Error", str(error))
+            self._set_status("Backend operation failed.", RED)
+    def _detect_deadlock(self):
+        try:
+           result = self.backend_command("DETECT")
+
+           print("DETECT RESPONSE:", result)
+
+           message = result.get("message", "No message received.")
+
+           messagebox.showinfo(
+            "Deadlock Detection Result",
+             message
+        )
+
+        except Exception as error:
+            messagebox.showerror(
+            "Detection Error",
+            str(error)
+        )
+    def _show_locks(self):
+        try:
+            result = self.backend_command("STATE")
+
+            locks = result.get("locks", [])
+            waiting = result.get("waiting", [])
+
+            window = tk.Toplevel(self.root)
+            window.title("Lock Information")
+            window.geometry("650x450")
+            window.configure(bg=BG)
+
+            tk.Label(
+                window,
+                text="Current Lock Information",
+                bg=BG, fg=TEXT,
+                font=("Segoe UI", 16, "bold")
+            ).pack(anchor="w", padx=20, pady=15)
+
+            tk.Label(
+                window,
+                text=f"Locks Held: {len(locks)}",
+                bg=BG, fg=TEXT,
+                font=("Segoe UI", 10, "bold")
+            ).pack(anchor="w", padx=20)
+
+            lock_table = ttk.Treeview(
+                window,
+                columns=("file", "transaction"),
+                show="headings",
+                height=5
+            )
+
+            lock_table.heading("file", text="RESOURCE / FILE")
+            lock_table.heading("transaction", text="LOCK HOLDER")
+            lock_table.pack(fill="x", padx=20, pady=8)
+
+            for item in locks:
+                lock_table.insert(
+                    "",
+                    "end",
+                    values=(
+                        item.get("file", "-"),
+                        f"T{item.get('transaction_id', '-')}"
+                    )
+                )
+
+            tk.Label(
+                window,
+                text=f"Waiting Requests: {len(waiting)}",
+                bg=BG, fg=TEXT,
+                font=("Segoe UI", 10, "bold")
+            ).pack(anchor="w", padx=20, pady=(12, 0))
+
+            waiting_table = ttk.Treeview(
+                window,
+                columns=("file", "transaction"),
+                show="headings",
+                height=5
+            )
+
+            waiting_table.heading("file", text="RESOURCE / FILE")
+            waiting_table.heading("transaction", text="WAITING TRANSACTION")
+            waiting_table.pack(fill="x", padx=20, pady=8)
+
+            for item in waiting:
+                waiting_table.insert(
+                    "",
+                    "end",
+                    values=(
+                        item.get("file", "-"),
+                        f"T{item.get('transaction_id', '-')}"
+                    )
+                )
+
+            self._refresh_dashboard_state()
+
+        except Exception as error:
+            messagebox.showerror("View Locks Error", str(error))
+
+    def _show_wait_for_graph(self):
+        try:
+            result = self.backend_command("STATE")
+            edges = result.get("edges", [])
+
+            window = tk.Toplevel(self.root)
+            window.title("Wait-For Graph")
+            window.geometry("600x400")
+            window.configure(bg=BG)
+
+            tk.Label(
+                window,
+                text="Wait-For Graph",
+                bg=BG, fg=TEXT,
+                font=("Segoe UI", 16, "bold")
+            ).pack(anchor="w", padx=20, pady=15)
+
+            graph_table = ttk.Treeview(
+                window,
+                columns=("waiting", "holding", "file"),
+                show="headings"
+            )
+
+            graph_table.heading("waiting", text="WAITING TRANSACTION")
+            graph_table.heading("holding", text="LOCK HOLDER")
+            graph_table.heading("file", text="RESOURCE / FILE")
+
+            graph_table.column("waiting", width=150)
+            graph_table.column("holding", width=150)
+            graph_table.column("file", width=200)
+
+            graph_table.pack(
+                fill="both",
+                expand=True,
+                padx=20,
+                pady=10
+            )
+
+            for edge in edges:
+                graph_table.insert(
+                    "",
+                    "end",
+                    values=(
+                        f"T{edge.get('from', '-')}",
+                        f"T{edge.get('to', '-')}",
+                        edge.get("file", "-")
+                    )
+                )
+
+            if not edges:
+                tk.Label(
+                    window,
+                    text="No wait-for relationships found.",
+                    bg=BG, fg=MUTED,
+                    font=("Segoe UI", 10)
+                ).pack(pady=10)
+
+            self._refresh_dashboard_state()
+
+        except Exception as error:
+            messagebox.showerror(
+                "Wait-For Graph Error",
+                str(error)
+            )
+
+    def _detect_deadlock(self):
+        self._dashboard_backend("DETECT")
+
+    def _recover_deadlock(self):
+        self._dashboard_backend("RECOVER")
+    def _refresh_dashboard_state(self):
+        try:
+            result = self.backend_command("STATE")
+
+            # Update selected transaction
+            selected = result.get("selected_transaction", -1)
+
+            if selected == -1:
+                self.current_tx_label.config(text="None")
+                self.tx_detail_label.config(
+                    text="No active transaction"
+                )
+            else:
+                self.current_tx_label.config(text=f"T{selected}")
+                self.tx_detail_label.config(
+                    text="Transaction selected"
+                )
+
+            # Get deadlock information
+            locks = result.get("locks", [])
+            waiting = result.get("waiting", [])
+            edges = result.get("edges", [])
+
+            # Format lock information
+            lock_details = (
+                "\n".join(f"  • {item}" for item in locks)
+                if locks else "  No locks currently held"
+            )
+
+            waiting_details = (
+                "\n".join(f"  • {item}" for item in waiting)
+                if waiting else "  No waiting requests"
+            )
+
+            edge_details = (
+                "\n".join(f"  • {item}" for item in edges)
+                if edges else "  No wait-for edges"
+            )
+
+            # Display complete information
+            self.lock_info.config(
+                text=(
+                    "DEADLOCK MANAGEMENT\n\n"
+                    f"Locks Held: {len(locks)}\n"
+                    f"Waiting Requests: {len(waiting)}\n"
+                    f"Wait-for Edges: {len(edges)}\n\n"
+                    "LOCK DETAILS\n"
+                    f"{lock_details}\n\n"
+                    "WAITING REQUEST DETAILS\n"
+                    f"{waiting_details}\n\n"
+                    "WAIT-FOR GRAPH DETAILS\n"
+                    f"{edge_details}"
+                )
+            )
+
+            # Update backend status
+            self.connection_badge.config(
+                text="● Backend Connected",
+                fg="#16A34A"
+            )
+
+        except Exception as error:
+            self.connection_badge.config(
+                text="● Backend Disconnected",
+                fg="#C2414B"
+            )
+
+            self._set_status(str(error), RED)
+    def _apply_paging_algorithm(self):
+        algorithm = self.paging_algorithm.get()
+
+        try:
+            result = self.backend_command("PAGING " + algorithm)
+            print("PAGING BACKEND RESPONSE:", result)
+
+            message = result.get("message", "Paging algorithm updated.")
+
+            if result.get("ok"):
+                self.memory_info.config(
+                    text=f"Memory Frames: 3     |     Page Size: 4096 bytes\n"
+                         f"Selected Algorithm: {algorithm}"
+                )
+
+                self._set_status(message.strip(), GREEN)
+                messagebox.showinfo("Paging Algorithm", message)
+
+            else:
+                self._set_status(message, RED)
+                messagebox.showwarning("Paging Algorithm", message)
+
+        except Exception as error:
+            messagebox.showerror("Paging Error", str(error))
+    
+    
+    def _view_memory_stats(self):
+        try:
+            result = self.backend_command("PAGINGSTATE")
+
+            if not result.get("ok"):
+                messagebox.showerror(
+                    "Memory Error",
+                    result.get("message", "Unable to retrieve memory statistics.")
+                )
+                return
+
+            algorithm = result.get("algorithm", "FIFO")
+            page_size = result.get("page_size", 4096)
+            hits = result.get("hits", 0)
+            faults = result.get("faults", 0)
+            replacements = result.get("replacements", 0)
+
+            frames = result.get("frames", [])
+            frame_text = ""
+
+            for frame in frames:
+                if frame.get("occupied"):
+                    frame_text += (
+                        f"Frame {frame['frame']}: "
+                        f"{frame['file']} | Page {frame['page_number']}\n"
+                    )
+                else:
+                    frame_text += f"Frame {frame['frame']}: Empty\n"
+
+            display_text = (
+                f"Paging Algorithm: {algorithm}\n"
+                f"Page Size: {page_size} bytes\n\n"
+                f"MEMORY FRAMES\n"
+                f"{frame_text}\n"
+                f"PAGE STATISTICS\n"
+                f"Page Hits: {hits}\n"
+                f"Page Faults: {faults}\n"
+                f"Page Replacements: {replacements}"
+            )
+
+            self.memory_info.config(text=display_text)
+            self._set_status("Memory statistics refreshed.", GREEN)
+
+        except Exception as error:
+            messagebox.showerror("Memory Error", str(error))
+
+           
+    def _select_transaction_dialog(self):
+        try:
+            connection = self._connect()
+            cursor = connection.cursor()
+            cursor.execute(
+                "SELECT transaction_id, status FROM transactions "
+                "WHERE status = 'ACTIVE' ORDER BY transaction_id"
+            )
+            rows = cursor.fetchall()
+            connection.close()
+
+            if not rows:
+                messagebox.showinfo(
+                    "Select Transaction",
+                    "No active transactions found. Begin a transaction first."
+                )
+                return
+
+            window = tk.Toplevel(self.root)
+            window.title("Select Transaction")
+            window.geometry("350x250")
+
+            tk.Label(
+                window, text="Choose an active transaction",
+                font=("Segoe UI", 11, "bold")
+            ).pack(pady=12)
+
+            choices = [str(row["transaction_id"]) for row in rows]
+            selected = tk.StringVar(value=choices[0])
+
+            ttk.Combobox(
+                window, textvariable=selected,
+                values=choices, state="readonly"
+            ).pack(pady=10)
+
+            def choose():
+                self._dashboard_backend("SELECT " + selected.get())
+                window.destroy()
+
+            tk.Button(
+                window, text="Select",
+                command=choose, bg="#4361EE",
+                fg="white", padx=20, pady=7
+            ).pack(pady=12)
+
+        except sqlite3.Error as error:
+            messagebox.showerror("Transaction Error", str(error))
 
     @staticmethod
     def _now_sql():
